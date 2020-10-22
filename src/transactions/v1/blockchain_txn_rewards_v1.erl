@@ -291,6 +291,12 @@ get_reward_vars(Start, End, Ledger) ->
         {ok, R4} -> R4;
         _ -> 1
     end,
+
+    WitnessRedundancy = case blockchain:config(?witness_redundancy, Ledger) of
+                            {ok, WR} -> WR;
+                            _ -> 1
+                        end,
+
     EpochReward = calculate_epoch_reward(Start, End, Ledger),
     #{
         monthly_reward => MonthlyReward,
@@ -300,6 +306,7 @@ get_reward_vars(Start, End, Ledger) ->
         poc_challengees_percent => PocChallengeesPercent,
         poc_challengers_percent => PocChallengersPercent,
         poc_witnesses_percent => PocWitnessesPercent,
+        witness_redundancy => WitnessRedundancy,
         consensus_percent => ConsensusPercent,
         consensus_members => ConsensusMembers,
         dc_percent => DCPercent,
@@ -578,7 +585,7 @@ poc_challengees_rewards_(Version, [Elem|Path], StaticPath, Txn, Chain, Ledger, _
                             Ledger :: blockchain_ledger_v1:ledger(),
                             WitnessRewards :: map()) -> #{{gateway, libp2p_crypto:pubkey_bin()} => non_neg_integer()}.
 poc_witnesses_rewards(Transactions,
-                      #{poc_version := POCVersion},
+                      #{poc_version := POCVersion, witness_redundancy := WitnessRedundancy},
                       Chain,
                       Ledger,
                       WitnessRewards) ->
@@ -604,11 +611,28 @@ poc_witnesses_rewards(Transactions,
                                               [] ->
                                                   Acc1;
                                               ValidWitnesses ->
+                                                  ToAdd = case WitnessRedundancy of
+                                                              1 ->
+                                                                  %% continue with the old thing
+                                                                  1;
+                                                              N ->
+                                                                  L = length(ValidWitnesses),
+                                                                  case L =< N of
+                                                                      true ->
+                                                                          %% Consider ideal redundant coverage when number of valid_witnesses is less than
+                                                                          %% or equal to configured witness_redundancy
+                                                                          1;
+                                                                      false ->
+                                                                          %% Proportional reward_unit as there are more valid_witnesses than necessary
+                                                                          blockchain_utils:normalize_float(N/L)
+                                                                  end
+                                                          end,
+
                                                   lists:foldl(
                                                     fun(WitnessRecord, Map) ->
                                                             Witness = blockchain_poc_witness_v1:gateway(WitnessRecord),
                                                             I = maps:get(Witness, Map, 0),
-                                                            maps:put(Witness, I+1, Map)
+                                                            maps:put(Witness, I+ToAdd, Map)
                                                     end,
                                                     Acc1,
                                                     ValidWitnesses
