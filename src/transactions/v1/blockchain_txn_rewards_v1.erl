@@ -1184,7 +1184,8 @@ poc_witnesses_rewards_test() ->
       poc_challengees_percent => 0.0,
       poc_challengers_percent => 0.0,
       dc_remainder => 0,
-      poc_version => 5
+      poc_version => 5,
+      witness_redundancy => 1
      },
 
     LedgerVars = maps:put(?poc_version, 5, common_poc_vars()),
@@ -1355,7 +1356,8 @@ old_poc_witnesses_rewards_test() ->
         poc_challengers_percent => 0.0,
         poc_challengees_percent => 0.0,
         dc_remainder => 0,
-        poc_version => 2
+        poc_version => 2,
+        witness_redundancy => 1
     },
     Rewards = #{
         {gateway, poc_witnesses, <<"1">>} => 25,
@@ -1471,7 +1473,7 @@ dc_rewards_v3_spillover_test() ->
         dc_percent => 0.05,
         consensus_percent => 0.1,
         poc_challengees_percent => 0.20,
-        poc_challengers_percent => 0.15, 
+        poc_challengers_percent => 0.15,
         poc_witnesses_percent => 0.15,
         securities_percent => 0.35,
         sc_version => 2,
@@ -1480,7 +1482,8 @@ dc_rewards_v3_spillover_test() ->
         poc_version => 5,
         dc_remainder => 0,
         oracle_price => 100000000, %% 1 dollar
-        consensus_members => [<<"c">>, <<"d">>]
+        consensus_members => [<<"c">>, <<"d">>],
+        witness_redundancy => 1
     },
 
     LedgerVars = maps:merge(#{?poc_version => 5, ?sc_version => 2, ?sc_grace_blocks => 5}, common_poc_vars()),
