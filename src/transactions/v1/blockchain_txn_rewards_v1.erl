@@ -457,7 +457,7 @@ normalize_challenger_rewards(ChallengerRewards, #{epoch_reward := EpochReward,
                               Ledger :: blockchain_ledger_v1:ledger(),
                               map()) -> #{{gateway, libp2p_crypto:pubkey_bin()} => non_neg_integer()}.
 poc_challengees_rewards(Transactions,
-                        Vars,
+                        #{poc_version := Version},
                         Chain,
                         Ledger,
                         ExistingRewards) ->
@@ -468,7 +468,7 @@ poc_challengees_rewards(Transactions,
                     Acc0;
                 true ->
                     Path = blockchain_txn_poc_receipts_v1:path(Txn),
-                    poc_challengees_rewards_(Vars, Path, Path, Txn, Chain, Ledger, true, Acc0)
+                    poc_challengees_rewards_(Version, Path, Path, Txn, Chain, Ledger, true, Acc0)
             end
         end,
         ExistingRewards,
@@ -491,18 +491,9 @@ normalize_challengee_rewards(ChallengeeRewards, #{epoch_reward := EpochReward,
         ChallengeeRewards
     ).
 
-poc_challengees_rewards_(_Vars, [], _StaticPath, _Txn, _Chain, _Ledger, _, Acc) ->
+poc_challengees_rewards_(_Version, [], _StaticPath, _Txn, _Chain, _Ledger, _, Acc) ->
     Acc;
-poc_challengees_rewards_(#{poc_version := Version,
-                           witness_redundancy := WitnessRedundancy,
-                           poc_reward_decay_rate := DecayRate},
-                         [Elem|Path],
-                         StaticPath,
-                         Txn,
-                         Chain,
-                         Ledger,
-                         IsFirst,
-                         Acc0) when Version >= 2 ->
+poc_challengees_rewards_(Version, [Elem|Path], StaticPath, Txn, Chain, Ledger, IsFirst, Acc0) when Version >= 2 ->
     %% check if there were any legitimate witnesses
     Witnesses = case Version of
                     V when is_integer(V), V >= 9 ->
@@ -524,21 +515,7 @@ poc_challengees_rewards_(#{poc_version := Version,
                         blockchain_poc_path_element_v1:witnesses(Elem)
                 end,
     Challengee = blockchain_poc_path_element_v1:challengee(Elem),
-
-    I = case WitnessRedundancy of
-            N when N > ?DEFAULT_WITNESS_REDUNDANCY ->
-                W = length(Witnesses),
-                case W =< N of
-                    true ->
-                        1;
-                    false ->
-                        blockchain_utils:normalize_float(1 + (1 - math:pow(DecayRate, (W - N))))
-                end;
-            _ ->
-                %% Do old behavior
-                maps:get(Challengee, Acc0, 0)
-        end,
-
+    I = maps:get(Challengee, Acc0, 0),
     case blockchain_poc_path_element_v1:receipt(Elem) of
         undefined ->
             Acc1 = case
