@@ -301,7 +301,7 @@ get_reward_vars(Start, End, Ledger) ->
 
     DecayRate = case blockchain:config(?poc_reward_decay_rate, Ledger) of
                     {ok, R} -> R;
-                    _ -> 0
+                    _ -> 1.0
                 end,
 
     EpochReward = calculate_epoch_reward(Start, End, Ledger),
