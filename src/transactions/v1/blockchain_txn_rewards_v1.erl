@@ -28,6 +28,8 @@
     to_json/2
 ]).
 
+-define(DEFAULT_WITNESS_REDUNDANCY, 5).
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -294,8 +296,13 @@ get_reward_vars(Start, End, Ledger) ->
 
     WitnessRedundancy = case blockchain:config(?witness_redundancy, Ledger) of
                             {ok, WR} -> WR;
-                            _ -> 1
+                            _ -> ?DEFAULT_WITNESS_REDUNDANCY
                         end,
+
+    DecayRate = case blockchain:config(?poc_reward_decay_rate, Ledger) of
+                    {ok, R} -> R;
+                    _ -> 0
+                end,
 
     EpochReward = calculate_epoch_reward(Start, End, Ledger),
     #{
@@ -306,14 +313,15 @@ get_reward_vars(Start, End, Ledger) ->
         poc_challengees_percent => PocChallengeesPercent,
         poc_challengers_percent => PocChallengersPercent,
         poc_witnesses_percent => PocWitnessesPercent,
-        witness_redundancy => WitnessRedundancy,
         consensus_percent => ConsensusPercent,
         consensus_members => ConsensusMembers,
         dc_percent => DCPercent,
         sc_grace_blocks => SCGrace,
         sc_version => SCVersion,
         poc_version => POCVersion,
-        reward_version => RewardVersion
+        reward_version => RewardVersion,
+        witness_redundancy => WitnessRedundancy,
+        poc_reward_decay_rate => DecayRate
     }.
 
 -spec calculate_epoch_reward(pos_integer(), pos_integer(), blockchain_ledger_v1:ledger()) -> float().
@@ -585,7 +593,10 @@ poc_challengees_rewards_(Version, [Elem|Path], StaticPath, Txn, Chain, Ledger, _
                             Ledger :: blockchain_ledger_v1:ledger(),
                             WitnessRewards :: map()) -> #{{gateway, libp2p_crypto:pubkey_bin()} => non_neg_integer()}.
 poc_witnesses_rewards(Transactions,
-                      #{poc_version := POCVersion, witness_redundancy := WitnessRedundancy},
+                      #{poc_version := POCVersion,
+                        witness_redundancy := WitnessRedundancy,
+                        poc_reward_decay_rate := DecayRate
+                       },
                       Chain,
                       Ledger,
                       WitnessRewards) ->
@@ -612,20 +623,17 @@ poc_witnesses_rewards(Transactions,
                                                   Acc1;
                                               ValidWitnesses ->
                                                   ToAdd = case WitnessRedundancy of
-                                                              1 ->
-                                                                  %% continue with the old thing
-                                                                  1;
-                                                              N ->
-                                                                  L = length(ValidWitnesses),
-                                                                  case L =< N of
+                                                              N when N > ?DEFAULT_WITNESS_REDUNDANCY ->
+                                                                  W = length(ValidWitnesses),
+                                                                  case W =< N of
                                                                       true ->
-                                                                          %% Consider ideal redundant coverage when number of valid_witnesses is less than
-                                                                          %% or equal to configured witness_redundancy
                                                                           1;
                                                                       false ->
-                                                                          %% Proportional reward_unit as there are more valid_witnesses than necessary
-                                                                          blockchain_utils:normalize_float(N/L)
-                                                                  end
+                                                                          blockchain_utils:normalize_float((N - (1 - math:pow(DecayRate, (W - N))))/W)
+                                                                  end;
+                                                              _ ->
+                                                                  %% Follow old behavior when witness_redundancy = DEFAULT_WITNESS_REDUNDANCY = 5
+                                                                  1
                                                           end,
 
                                                   lists:foldl(
@@ -1185,7 +1193,7 @@ poc_witnesses_rewards_test() ->
       poc_challengers_percent => 0.0,
       dc_remainder => 0,
       poc_version => 5,
-      witness_redundancy => 1
+      witness_redundancy => ?DEFAULT_WITNESS_REDUNDANCY
      },
 
     LedgerVars = maps:put(?poc_version, 5, common_poc_vars()),
@@ -1357,7 +1365,7 @@ old_poc_witnesses_rewards_test() ->
         poc_challengees_percent => 0.0,
         dc_remainder => 0,
         poc_version => 2,
-        witness_redundancy => 1
+        witness_redundancy => ?DEFAULT_WITNESS_REDUNDANCY
     },
     Rewards = #{
         {gateway, poc_witnesses, <<"1">>} => 25,
@@ -1483,7 +1491,7 @@ dc_rewards_v3_spillover_test() ->
         dc_remainder => 0,
         oracle_price => 100000000, %% 1 dollar
         consensus_members => [<<"c">>, <<"d">>],
-        witness_redundancy => 1
+        witness_redundancy => ?DEFAULT_WITNESS_REDUNDANCY
     },
 
     LedgerVars = maps:merge(#{?poc_version => 5, ?sc_version => 2, ?sc_grace_blocks => 5}, common_poc_vars()),
