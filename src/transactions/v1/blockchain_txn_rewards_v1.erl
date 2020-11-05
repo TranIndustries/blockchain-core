@@ -28,8 +28,6 @@
     to_json/2
 ]).
 
--define(DEFAULT_WITNESS_REDUNDANCY, 5).
-
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
@@ -296,12 +294,12 @@ get_reward_vars(Start, End, Ledger) ->
 
     WitnessRedundancy = case blockchain:config(?witness_redundancy, Ledger) of
                             {ok, WR} -> WR;
-                            _ -> ?DEFAULT_WITNESS_REDUNDANCY
+                            _ -> undefined
                         end,
 
     DecayRate = case blockchain:config(?poc_reward_decay_rate, Ledger) of
                     {ok, R} -> R;
-                    _ -> 1.0
+                    _ -> undefined
                 end,
 
     EpochReward = calculate_epoch_reward(Start, End, Ledger),
@@ -524,21 +522,7 @@ poc_challengees_rewards_(#{poc_version := Version,
                         blockchain_poc_path_element_v1:witnesses(Elem)
                 end,
     Challengee = blockchain_poc_path_element_v1:challengee(Elem),
-
-    I = case WitnessRedundancy of
-            N when N > ?DEFAULT_WITNESS_REDUNDANCY ->
-                W = length(Witnesses),
-                case W =< N of
-                    true ->
-                        1;
-                    false ->
-                        blockchain_utils:normalize_float(1 + (1 - math:pow(DecayRate, (W - N))))
-                end;
-            _ ->
-                %% Do old behavior
-                maps:get(Challengee, Acc0, 0)
-        end,
-
+    I = maps:get(Challengee, Acc0, 0),
     case blockchain_poc_path_element_v1:receipt(Elem) of
         undefined ->
             Acc1 = case
@@ -549,14 +533,26 @@ poc_challengees_rewards_(#{poc_version := Version,
                            %% while we don't have a receipt for this node, we do know
                            %% there were witnesses or the path continued which means
                            %% the challengee transmitted
-                           maps:put(Challengee, I+1, Acc0);
+                           case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                               {error, _} ->
+                                   %% Old behavior
+                                   maps:put(Challengee, I+1, Acc0);
+                               {ok, ToAdd} ->
+                                   maps:put(Challengee, I+ToAdd, Acc0)
+                           end;
                        true when is_integer(Version), Version > 4, IsFirst == false ->
                            %% while we don't have a receipt for this node, we do know
                            %% there were witnesses or the path continued which means
                            %% the challengee transmitted
                            %% Additionally, we know this layer came in over radio so
                            %% there's an implicit rx as well
-                           maps:put(Challengee, I+2, Acc0);
+                           case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                               {error, _} ->
+                                   %% Old behavior
+                                   maps:put(Challengee, I+2, Acc0);
+                               {ok, ToAdd} ->
+                                   maps:put(Challengee, I+ToAdd, Acc0)
+                           end;
                        _ ->
                            Acc0
                    end,
@@ -572,12 +568,30 @@ poc_challengees_rewards_(#{poc_version := Version,
                                    %% this challengee both rx'd and tx'd over radio
                                    %% AND sent a receipt
                                    %% so give them 3 payouts
-                                   maps:put(Challengee, I+3, Acc0);
+                                   case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                                       {error, _} ->
+                                           %% Old behavior
+                                           maps:put(Challengee, I+3, Acc0);
+                                       {ok, ToAdd} ->
+                                           maps:put(Challengee, I+ToAdd, Acc0)
+                                   end;
                                false when is_integer(Version), Version > 4 ->
                                    %% this challengee rx'd and sent a receipt
-                                   maps:put(Challengee, I+2, Acc0);
+                                   case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                                       {error, _} ->
+                                           %% Old behavior
+                                           maps:put(Challengee, I+2, Acc0);
+                                       {ok, ToAdd} ->
+                                           maps:put(Challengee, I+ToAdd, Acc0)
+                                   end;
                                _ ->
-                                   maps:put(Challengee, I+1, Acc0)
+                                   case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                                       {error, _} ->
+                                           %% Old behavior
+                                           maps:put(Challengee, I+1, Acc0);
+                                       {ok, ToAdd} ->
+                                           maps:put(Challengee, I+ToAdd, Acc0)
+                                   end
                            end,
                     poc_challengees_rewards_(Version, Path, StaticPath, Txn, Chain, Ledger, false, Acc1);
                 p2p ->
@@ -592,9 +606,21 @@ poc_challengees_rewards_(#{poc_version := Version,
                                    Acc0;
                                true when is_integer(Version), Version > 4 ->
                                    %% Sent a receipt and the path continued on
-                                   maps:put(Challengee, I+2, Acc0);
+                                   case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                                       {error, _} ->
+                                           %% Old behavior
+                                           maps:put(Challengee, I+2, Acc0);
+                                       {ok, ToAdd} ->
+                                           maps:put(Challengee, I+ToAdd, Acc0)
+                                   end;
                                true ->
-                                   maps:put(Challengee, I+1, Acc0)
+                                   case poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) of
+                                       {error, _} ->
+                                           %% Old behavior
+                                           maps:put(Challengee, I+1, Acc0);
+                                       {ok, ToAdd} ->
+                                           maps:put(Challengee, I+ToAdd, Acc0)
+                                   end
                            end,
                     poc_challengees_rewards_(Version, Path, StaticPath, Txn, Chain, Ledger, false, Acc1)
             end
@@ -608,6 +634,23 @@ poc_challengees_rewards_(Version, [Elem|Path], StaticPath, Txn, Chain, Ledger, _
             I = maps:get(Challengee, Acc0, 0),
             Acc1 =  maps:put(Challengee, I+1, Acc0),
             poc_challengees_rewards_(Version, Path, StaticPath, Txn, Chain, Ledger, false, Acc1)
+    end.
+
+-spec poc_challengee_reward_unit(WitnessRedundancy :: undefined | pos_integer(),
+                                 DecayRate :: undefined | float(),
+                                 Witnesses :: blockchain_poc_witness_v1:poc_witnesses()) -> {error, any()} | {ok, float()}.
+poc_challengee_reward_unit(WitnessRedundancy, DecayRate, Witnesses) ->
+    case {WitnessRedundancy, DecayRate} of
+        {undefined, _} -> {error, witness_redundancy_undefined};
+        {_, undefined} -> {error, poc_reward_decay_rate_undefined};
+        {N, R} ->
+            W = length(Witnesses),
+            case W =< N of
+                true ->
+                    {ok, blockchain_utils:normalize_float(W / N)};
+                false ->
+                    {ok, blockchain_utils:normalize_float(1 + (1 - math:pow(R, (W - N))))}
+            end
     end.
 
 -spec poc_witnesses_rewards(Transactions :: blockchain_txn:txns(),
@@ -645,18 +688,17 @@ poc_witnesses_rewards(Transactions,
                                               [] ->
                                                   Acc1;
                                               ValidWitnesses ->
-                                                  ToAdd = case WitnessRedundancy of
-                                                              N when N > ?DEFAULT_WITNESS_REDUNDANCY ->
+                                                  ToAdd = case {WitnessRedundancy, DecayRate} of
+                                                              {undefined, _} -> 1;
+                                                              {_, undefined} -> 1;
+                                                              {N, R} ->
                                                                   W = length(ValidWitnesses),
                                                                   case W =< N of
                                                                       true ->
                                                                           1;
                                                                       false ->
-                                                                          blockchain_utils:normalize_float((N - (1 - math:pow(DecayRate, (W - N))))/W)
-                                                                  end;
-                                                              _ ->
-                                                                  %% Follow old behavior when witness_redundancy = DEFAULT_WITNESS_REDUNDANCY = 5
-                                                                  1
+                                                                          blockchain_utils:normalize_float((N - (1 - math:pow(R, (W - N))))/W)
+                                                                  end
                                                           end,
 
                                                   lists:foldl(
@@ -1216,7 +1258,8 @@ poc_witnesses_rewards_test() ->
       poc_challengers_percent => 0.0,
       dc_remainder => 0,
       poc_version => 5,
-      witness_redundancy => ?DEFAULT_WITNESS_REDUNDANCY
+      witness_redundancy => 5,
+      poc_reward_decay_rate => 0.5
      },
 
     LedgerVars = maps:put(?poc_version, 5, common_poc_vars()),
@@ -1388,7 +1431,8 @@ old_poc_witnesses_rewards_test() ->
         poc_challengees_percent => 0.0,
         dc_remainder => 0,
         poc_version => 2,
-        witness_redundancy => ?DEFAULT_WITNESS_REDUNDANCY
+        witness_redundancy => 5,
+        poc_reward_decay_rate => 0.5
     },
     Rewards = #{
         {gateway, poc_witnesses, <<"1">>} => 25,
@@ -1514,7 +1558,8 @@ dc_rewards_v3_spillover_test() ->
         dc_remainder => 0,
         oracle_price => 100000000, %% 1 dollar
         consensus_members => [<<"c">>, <<"d">>],
-        witness_redundancy => ?DEFAULT_WITNESS_REDUNDANCY
+        witness_redundancy => 5,
+        poc_reward_decay_rate => 0.5
     },
 
     LedgerVars = maps:merge(#{?poc_version => 5, ?sc_version => 2, ?sc_grace_blocks => 5}, common_poc_vars()),
